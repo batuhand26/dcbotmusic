@@ -1,0 +1,34 @@
+{
+  "name": "dcbot",
+  "version": "1.0.0",
+  "description": "Lightweight Discord music bot with slash commands and queue controls",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "music-bot",
+    "discord-player",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@discord-player/extractor": "^7.2.0",
+    "@discord-player/ffmpeg": "^7.2.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@snazzah/davey": "^0.1.12",
+    "bgutils-js": "^4.0.3",
+    "discord-player": "^7.2.0",
+    "discord-player-youtubei": "^3.1.0",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "googlevideo": "^4.1.1",
+    "mediaplex": "^1.0.0",
+    "simple-ytdl-core": "^1.1.1"
+  }
+}
