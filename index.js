@@ -7,10 +7,10 @@ const {
   EmbedBuilder,
   MessageFlags,
 } = require('discord.js');
-const { Player } = require('discord-player');
+const { Player, QueryType, Track, Playlist, SearchResult } = require('discord-player');
 const { FFmpeg } = require('@discord-player/ffmpeg');
 const { DefaultExtractors } = require('@discord-player/extractor');
-const { YoutubeExtractor } = require('discord-player-youtubei');
+const { YoutubeExtractor, getInnertube } = require('discord-player-youtubei');
 
 const token = process.env.DISCORD_TOKEN;
 const guildId = process.env.GUILD_ID;
@@ -73,14 +73,173 @@ function sameVoiceChannel(interaction, queue) {
 function normalizePlayQuery(input) {
   const query = input
     .trim()
-    // Remove Markdown escapes: d7F\_X0AUV\_c -> d7F_X0AUV_c
-    .replace(/\\([_()[\]])/g, '$1');
+    .replace(/\\([\\_*[\]()~`>#+\-=|{}.!&])/g, '$1');
 
-  // Markdown links copied from apps such as Discord or ChatGPT may arrive as
-  // `[https://...](https://...)`. Pass only the real URL to discord-player and
-  // leave normal song searches unchanged.
-  const urlMatch = query.match(/https?:\/\/[^\s<>\]\\)]+/i);
-  return urlMatch ? urlMatch[0] : query;
+  const httpsIndex = query.toLowerCase().indexOf('https://');
+  const httpIndex = query.toLowerCase().indexOf('http://');
+  const starts = [httpsIndex, httpIndex].filter((index) => index >= 0);
+  if (starts.length === 0) return query;
+
+  const start = Math.min(...starts);
+  let rawUrl = query.slice(start);
+  const delimiterIndex = rawUrl.search(/[\s<>[\]()]/);
+  if (delimiterIndex >= 0) rawUrl = rawUrl.slice(0, delimiterIndex);
+  rawUrl = rawUrl.replace(/[.,;:!?]+$/, '');
+
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    const isYoutubeHost = host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com';
+
+    if (host === 'youtu.be') {
+      const videoId = url.pathname.split('/').filter(Boolean)[0];
+      if (!videoId) return rawUrl;
+      const canonical = new URL('https://www.youtube.com/watch');
+      canonical.searchParams.set('v', videoId);
+      const playlistId = url.searchParams.get('list');
+      if (playlistId) canonical.searchParams.set('list', playlistId);
+      return canonical.toString();
+    }
+
+    if (isYoutubeHost) {
+      let videoId = url.searchParams.get('v');
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (!videoId && ['shorts', 'live', 'embed'].includes(parts[0])) videoId = parts[1];
+      const playlistId = url.searchParams.get('list');
+
+      if (videoId) {
+        const canonical = new URL('https://www.youtube.com/watch');
+        canonical.searchParams.set('v', videoId);
+        if (playlistId) canonical.searchParams.set('list', playlistId);
+        return canonical.toString();
+      }
+
+      if (playlistId) return `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
+    }
+  } catch {
+    // Keep the extracted URL; discord-player will report it if it is invalid.
+  }
+
+  return rawUrl;
+}
+
+function getYoutubeUrlInfo(query) {
+  try {
+    const url = new URL(query);
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    const isYoutubeHost = host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com' || host === 'youtu.be';
+    if (!isYoutubeHost) return null;
+
+    const videoId = host === 'youtu.be'
+      ? url.pathname.split('/').filter(Boolean)[0]
+      : url.searchParams.get('v');
+
+    return { videoId: videoId || null, playlistId: url.searchParams.get('list') };
+  } catch {
+    return null;
+  }
+}
+
+function getYoutubeMixInfo(query) {
+  const info = getYoutubeUrlInfo(query);
+  if (!info?.videoId || !info.playlistId?.startsWith('RD')) return null;
+  return info;
+}
+
+function getPlaySearchEngine(query) {
+  const youtube = getYoutubeUrlInfo(query);
+  if (youtube?.playlistId) return QueryType.YOUTUBE_PLAYLIST;
+
+  try {
+    new URL(query);
+    return QueryType.AUTO;
+  } catch {
+    return QueryType.YOUTUBE_SEARCH;
+  }
+}
+
+async function createYoutubeMixSearchResult(query, requestedBy) {
+  const mix = getYoutubeMixInfo(query);
+  if (!mix) return null;
+
+  const extractor = player.extractors.get(YoutubeExtractor.identifier);
+  if (!extractor) throw new Error('YouTube extractor is not loaded.');
+
+  const tube = await getInnertube({});
+  const panel = await tube.music.getUpNext(mix.videoId);
+  const items = Array.from(panel?.contents || []);
+  const tracks = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    const node = item?.primary || item;
+    const videoId = node?.video_id;
+    if (!videoId || seen.has(videoId)) continue;
+    seen.add(videoId);
+
+    const track = new Track(player, {
+      title: node.title?.toString?.() || 'Unknown title',
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      duration: node.duration?.text || '0:00',
+      thumbnail: node.thumbnail?.at?.(0)?.url || '',
+      author: typeof node.author === 'string' ? node.author : (node.author?.name || 'YouTube'),
+      requestedBy,
+      source: 'youtube',
+      queryType: QueryType.YOUTUBE_VIDEO,
+    });
+    track.extractor = extractor;
+    tracks.push(track);
+  }
+
+  if (tracks.length === 0) return null;
+
+  const playlist = new Playlist(player, {
+    title: `YouTube Mix - ${tracks[0].cleanTitle || tracks[0].title}`,
+    description: 'YouTube Mix',
+    thumbnail: tracks[0].thumbnail,
+    type: 'playlist',
+    source: 'youtube',
+    author: { name: 'YouTube Mix', url: '' },
+    tracks,
+    id: panel.playlist_id || mix.playlistId,
+    url: query,
+  });
+
+  for (const track of tracks) track.playlist = playlist;
+
+  return new SearchResult(player, {
+    query,
+    queryType: QueryType.YOUTUBE_PLAYLIST,
+    playlist,
+    tracks,
+    extractor,
+    requestedBy,
+  });
+}
+
+async function resolvePlayInput(query, requestedBy) {
+  const mix = getYoutubeMixInfo(query);
+  if (!mix) return query;
+
+  try {
+    const nativeResult = await player.search(query, {
+      requestedBy,
+      searchEngine: QueryType.YOUTUBE_PLAYLIST,
+      ignoreCache: true,
+    });
+    if (nativeResult.hasTracks()) return nativeResult;
+  } catch (error) {
+    console.warn(`Native YouTube Mix lookup failed: ${error.message}`);
+  }
+
+  try {
+    const fallback = await createYoutubeMixSearchResult(query, requestedBy);
+    if (fallback?.hasTracks()) return fallback;
+  } catch (error) {
+    console.warn(`YouTube Mix fallback failed: ${error.message}`);
+  }
+
+  return `https://www.youtube.com/watch?v=${mix.videoId}`;
 }
 
 async function replyError(interaction, message) {
@@ -175,11 +334,23 @@ client.on('interactionCreate', async (interaction) => {
       const query = normalizePlayQuery(interaction.options.getString('query', true));
       await interaction.deferReply();
 
-      const { track, queue } = await player.play(voiceChannel, query, {
+      const playInput = await resolvePlayInput(query, interaction.user);
+
+      const { track, queue, searchResult } = await player.play(voiceChannel, playInput, {
         requestedBy: interaction.user,
+        searchEngine: getPlaySearchEngine(query),
         nodeOptions: {
           metadata: { channelId: interaction.channelId },
           volume: 70,
+          // Keep the playback pipeline light for local Windows playback.
+          // These DSP stages are unused by this bot and can add unnecessary
+          // real-time CPU work, which may show up as brief crackling/jitter.
+          disableEqualizer: true,
+          disableFilterer: true,
+          disableBiquad: true,
+          disableCompressor: true,
+          disableReverb: true,
+          disableSeeker: true,
           leaveOnEmpty: true,
           leaveOnEmptyCooldown: 60_000,
           leaveOnEnd: true,
@@ -189,6 +360,9 @@ client.on('interactionCreate', async (interaction) => {
       });
 
       queue.setMetadata({ channelId: interaction.channelId });
+      if (searchResult.playlist) {
+        return interaction.followUp(`✅ Added playlist **${searchResult.playlist.title}** (${searchResult.tracks.length} tracks) to the queue.`);
+      }
       return interaction.followUp(`✅ Added **${track.cleanTitle || track.title}** to the queue.`);
     }
 
@@ -312,3 +486,4 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));
 
 client.login(token);
+
