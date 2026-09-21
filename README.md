@@ -10,6 +10,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 - Stop playback and clear the queue
 - View the current queue
 - Show the currently playing track
+- Loop the current track or the whole queue
 - Adjust playback volume
 - Leave the voice channel
 - Optional guild-specific slash command registration for faster development
@@ -25,6 +26,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 | `/stop` | Stop playback and clear the queue |
 | `/queue` | Show the current music queue |
 | `/nowplaying` | Show the currently playing track |
+| `/loop <off|track|queue>` | Disable looping, repeat the current track, or repeat the whole queue |
 | `/volume <0-100>` | Change the playback volume |
 | `/leave` | Disconnect the bot from the voice channel |
 

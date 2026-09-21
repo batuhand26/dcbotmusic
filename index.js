@@ -7,7 +7,7 @@ const {
   EmbedBuilder,
   MessageFlags,
 } = require('discord.js');
-const { Player, QueryType, Track, Playlist, SearchResult } = require('discord-player');
+const { Player, QueryType, QueueRepeatMode, Track, Playlist, SearchResult } = require('discord-player');
 const { FFmpeg } = require('@discord-player/ffmpeg');
 const { DefaultExtractors } = require('@discord-player/extractor');
 const { YoutubeExtractor, getInnertube } = require('discord-player-youtubei');
@@ -42,6 +42,20 @@ const commands = [
   new SlashCommandBuilder().setName('stop').setDescription('Stop playback and clear the queue'),
   new SlashCommandBuilder().setName('queue').setDescription('Show the music queue'),
   new SlashCommandBuilder().setName('nowplaying').setDescription('Show the currently playing track'),
+  new SlashCommandBuilder()
+    .setName('loop')
+    .setDescription('Change the music loop mode')
+    .addStringOption((option) =>
+      option
+        .setName('mode')
+        .setDescription('Choose what should repeat')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Off', value: 'off' },
+          { name: 'Current track', value: 'track' },
+          { name: 'Queue', value: 'queue' },
+        ),
+    ),
   new SlashCommandBuilder()
     .setName('volume')
     .setDescription('Change the playback volume')
@@ -406,6 +420,21 @@ client.on('interactionCreate', async (interaction) => {
       const level = interaction.options.getInteger('level', true);
       queue.node.setVolume(level);
       return interaction.reply(`🔊 Volume set to **${level}%**.`);
+    }
+
+    if (interaction.commandName === 'loop') {
+      const mode = interaction.options.getString('mode', true);
+      const repeatModes = {
+        off: QueueRepeatMode.OFF,
+        track: QueueRepeatMode.TRACK,
+        queue: QueueRepeatMode.QUEUE,
+      };
+
+      queue.setRepeatMode(repeatModes[mode]);
+
+      if (mode === 'track') return interaction.reply('🔂 Loop enabled for the current track.');
+      if (mode === 'queue') return interaction.reply('🔁 Loop enabled for the whole queue.');
+      return interaction.reply('➡️ Loop disabled.');
     }
 
     if (interaction.commandName === 'nowplaying') {
