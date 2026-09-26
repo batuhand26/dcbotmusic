@@ -10,6 +10,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 - Stop playback and clear the queue
 - View the current queue
 - Show the currently playing track
+- Control playback from Now Playing buttons
 - Loop the current track or the whole queue
 - Adjust playback volume
 - Leave the voice channel
@@ -29,6 +30,10 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 | `/loop <off|track|queue>` | Disable looping, repeat the current track, or repeat the whole queue |
 | `/volume <0-100>` | Change the playback volume |
 | `/leave` | Disconnect the bot from the voice channel |
+
+## Now Playing Controls
+
+Automatic Now Playing announcements and `/nowplaying` include **Pause/Resume**, **Skip**, and **Stop** buttons. The pause button toggles based on the current playback state. Controls only work for the queue and track shown in that panel, and the user must be in the bot's voice channel. Older panels cannot control a later track, and panels expire after a bot restart; use `/nowplaying` for fresh controls.
 
 ## Requirements
 

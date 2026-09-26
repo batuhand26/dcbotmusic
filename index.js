@@ -1,10 +1,14 @@
 require('dotenv').config();
 
+const { randomBytes } = require('node:crypto');
 const {
   Client,
   GatewayIntentBits,
   SlashCommandBuilder,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   MessageFlags,
 } = require('discord.js');
 const { Player, QueryType, QueueRepeatMode, Track, Playlist, SearchResult } = require('discord-player');
@@ -25,6 +29,8 @@ const client = new Client({
 });
 
 const player = new Player(client);
+const nowPlayingPanels = new Map();
+const MAX_NOW_PLAYING_PANELS = 500;
 
 const commands = [
   new SlashCommandBuilder()
@@ -82,6 +88,52 @@ function sameVoiceChannel(interaction, queue) {
   const memberChannel = getVoiceChannel(interaction);
   const botChannelId = queue?.channel?.id;
   return memberChannel && (!botChannelId || memberChannel.id === botChannelId);
+}
+
+function registerNowPlayingPanel(queue, track) {
+  const panelId = randomBytes(12).toString('hex');
+  nowPlayingPanels.set(panelId, { queue, track });
+
+  if (nowPlayingPanels.size > MAX_NOW_PLAYING_PANELS) {
+    const oldestPanelId = nowPlayingPanels.keys().next().value;
+    nowPlayingPanels.delete(oldestPanelId);
+  }
+
+  return panelId;
+}
+
+function createNowPlayingComponents(queue, panelId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`np:${panelId}:toggle`)
+        .setLabel(queue.node.isPaused() ? 'Resume' : 'Pause')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`np:${panelId}:skip`)
+        .setLabel('Skip')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`np:${panelId}:stop`)
+        .setLabel('Stop')
+        .setStyle(ButtonStyle.Danger),
+    ),
+  ];
+}
+
+function createNowPlayingPayload(queue, track) {
+  const panelId = registerNowPlayingPanel(queue, track);
+  const embed = new EmbedBuilder()
+    .setTitle('🎵 Now playing')
+    .setDescription(`[${track.cleanTitle || track.title}](${track.url})`)
+    .addFields(
+      { name: 'Duration', value: track.duration || 'Unknown', inline: true },
+      { name: 'Requested by', value: track.requestedBy ? `<@${track.requestedBy.id}>` : 'Unknown', inline: true },
+    );
+
+  if (track.thumbnail) embed.setThumbnail(track.thumbnail);
+
+  return { embeds: [embed], components: createNowPlayingComponents(queue, panelId) };
 }
 
 function normalizePlayQuery(input) {
@@ -276,6 +328,60 @@ async function replyError(interaction, message) {
   }
 }
 
+async function handleNowPlayingButton(interaction) {
+  if (!interaction.guildId) return replyError(interaction, 'Music controls are only available in a server.');
+
+  const [, panelId, action] = interaction.customId.split(':');
+  const panel = nowPlayingPanels.get(panelId);
+  if (!panel) {
+    return replyError(interaction, 'This control panel has expired. Run /nowplaying for current controls.');
+  }
+
+  const queue = getQueue(interaction);
+  if (!queue || queue !== panel.queue || queue.currentTrack !== panel.track) {
+    return replyError(interaction, 'This panel is out of date. Run /nowplaying for the current track controls.');
+  }
+  if (!sameVoiceChannel(interaction, queue)) {
+    return replyError(interaction, 'You must be in the same voice channel as the bot to use these controls.');
+  }
+
+  if (action === 'toggle') {
+    const wasPaused = queue.node.isPaused();
+    const changed = wasPaused ? queue.node.resume() : queue.node.pause();
+    if (!changed) return replyError(interaction, 'Playback could not be updated.');
+
+    await interaction.update({
+      components: createNowPlayingComponents(queue, panelId),
+    });
+    return interaction.followUp({
+      content: wasPaused ? '▶️ Playback resumed.' : '⏸️ Playback paused.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (action === 'skip') {
+    const trackName = panel.track.cleanTitle || panel.track.title;
+    if (!queue.node.skip()) return replyError(interaction, 'There is no track to skip.');
+    await interaction.update({ components: [] });
+    return interaction.followUp({
+      content: `⏭️ Skipped **${trackName}**.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (action === 'stop') {
+    queue.clear();
+    queue.delete();
+    await interaction.update({ components: [] });
+    return interaction.followUp({
+      content: '⏹️ Playback stopped and the queue was cleared.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  return replyError(interaction, 'This control is not supported.');
+}
+
 async function sendNowPlaying(queue, track) {
   const channelId = queue.metadata?.channelId;
   if (!channelId) return;
@@ -284,16 +390,7 @@ async function sendNowPlaying(queue, track) {
     const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return;
 
-    const embed = new EmbedBuilder()
-      .setTitle('🎵 Now playing')
-      .setDescription(`[${track.cleanTitle || track.title}](${track.url})`)
-      .addFields(
-        { name: 'Duration', value: track.duration || 'Unknown', inline: true },
-        { name: 'Requested by', value: track.requestedBy ? `<@${track.requestedBy.id}>` : 'Unknown', inline: true },
-      );
-
-    if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-    await channel.send({ embeds: [embed] });
+    await channel.send(createNowPlayingPayload(queue, track));
   } catch (error) {
     console.error('Failed to send the now playing message:', error.message);
   }
@@ -333,6 +430,20 @@ client.once('clientReady', async () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
+  if (interaction.isButton() && interaction.customId.startsWith('np:')) {
+    try {
+      return await handleNowPlayingButton(interaction);
+    } catch (error) {
+      console.error('Now Playing button action failed:', error);
+      try {
+        return await replyError(interaction, 'Something went wrong while running this control. Check the console output.');
+      } catch (replyFailure) {
+        console.error('Failed to send the button error response:', replyFailure);
+        return null;
+      }
+    }
+  }
+
   if (!interaction.isChatInputCommand() || !interaction.guildId) return;
 
   try {
@@ -440,14 +551,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'nowplaying') {
       const track = queue.currentTrack;
       if (!track) return replyError(interaction, 'There is no track playing right now.');
-
-      const embed = new EmbedBuilder()
-        .setTitle('🎵 Now playing')
-        .setDescription(`[${track.cleanTitle || track.title}](${track.url})`)
-        .addFields({ name: 'Duration', value: track.duration || 'Unknown', inline: true });
-
-      if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-      return interaction.reply({ embeds: [embed] });
+      return interaction.reply(createNowPlayingPayload(queue, track));
     }
 
     if (interaction.commandName === 'queue') {
