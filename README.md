@@ -77,6 +77,12 @@ Check the main file for JavaScript syntax errors:
 npm run check
 ```
 
+Run the local unit tests for URL parsing, interaction responses, and Now Playing panel lifecycle:
+
+```bash
+npm test
+```
+
 If playback stops working after upstream YouTube changes, updating the extractor-related dependencies may help:
 
 ```bash

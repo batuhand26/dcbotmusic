@@ -1,6 +1,5 @@
 require('dotenv').config();
 
-const { randomBytes } = require('node:crypto');
 const {
   Client,
   GatewayIntentBits,
@@ -15,22 +14,24 @@ const { Player, QueryType, QueueRepeatMode, Track, Playlist, SearchResult } = re
 const { FFmpeg } = require('@discord-player/ffmpeg');
 const { DefaultExtractors } = require('@discord-player/extractor');
 const { YoutubeExtractor, getInnertube } = require('discord-player-youtubei');
+const {
+  normalizePlayQuery,
+  getYoutubeMixInfo,
+  getPlaySearchEngine,
+} = require('./src/play-query');
+const { NowPlayingPanelStore } = require('./src/now-playing-panels');
+const { replyError } = require('./src/interaction');
 
 const token = process.env.DISCORD_TOKEN;
 const guildId = process.env.GUILD_ID;
-
-if (!token) {
-  console.error('DISCORD_TOKEN is missing. Create a .env file and add your bot token.');
-  process.exit(1);
-}
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
 
 const player = new Player(client);
-const nowPlayingPanels = new Map();
-const MAX_NOW_PLAYING_PANELS = 500;
+const nowPlayingPanels = new NowPlayingPanelStore();
+const MAX_MIX_TRACKS = 50;
 
 const commands = [
   new SlashCommandBuilder()
@@ -91,15 +92,7 @@ function sameVoiceChannel(interaction, queue) {
 }
 
 function registerNowPlayingPanel(queue, track) {
-  const panelId = randomBytes(12).toString('hex');
-  nowPlayingPanels.set(panelId, { queue, track });
-
-  if (nowPlayingPanels.size > MAX_NOW_PLAYING_PANELS) {
-    const oldestPanelId = nowPlayingPanels.keys().next().value;
-    nowPlayingPanels.delete(oldestPanelId);
-  }
-
-  return panelId;
+  return nowPlayingPanels.register(queue.guild.id, track.id);
 }
 
 function createNowPlayingComponents(queue, panelId) {
@@ -136,94 +129,6 @@ function createNowPlayingPayload(queue, track) {
   return { embeds: [embed], components: createNowPlayingComponents(queue, panelId) };
 }
 
-function normalizePlayQuery(input) {
-  const query = input
-    .trim()
-    .replace(/\\([\\_*[\]()~`>#+\-=|{}.!&])/g, '$1');
-
-  const httpsIndex = query.toLowerCase().indexOf('https://');
-  const httpIndex = query.toLowerCase().indexOf('http://');
-  const starts = [httpsIndex, httpIndex].filter((index) => index >= 0);
-  if (starts.length === 0) return query;
-
-  const start = Math.min(...starts);
-  let rawUrl = query.slice(start);
-  const delimiterIndex = rawUrl.search(/[\s<>[\]()]/);
-  if (delimiterIndex >= 0) rawUrl = rawUrl.slice(0, delimiterIndex);
-  rawUrl = rawUrl.replace(/[.,;:!?]+$/, '');
-
-  try {
-    const url = new URL(rawUrl);
-    const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    const isYoutubeHost = host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com';
-
-    if (host === 'youtu.be') {
-      const videoId = url.pathname.split('/').filter(Boolean)[0];
-      if (!videoId) return rawUrl;
-      const canonical = new URL('https://www.youtube.com/watch');
-      canonical.searchParams.set('v', videoId);
-      const playlistId = url.searchParams.get('list');
-      if (playlistId) canonical.searchParams.set('list', playlistId);
-      return canonical.toString();
-    }
-
-    if (isYoutubeHost) {
-      let videoId = url.searchParams.get('v');
-      const parts = url.pathname.split('/').filter(Boolean);
-      if (!videoId && ['shorts', 'live', 'embed'].includes(parts[0])) videoId = parts[1];
-      const playlistId = url.searchParams.get('list');
-
-      if (videoId) {
-        const canonical = new URL('https://www.youtube.com/watch');
-        canonical.searchParams.set('v', videoId);
-        if (playlistId) canonical.searchParams.set('list', playlistId);
-        return canonical.toString();
-      }
-
-      if (playlistId) return `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
-    }
-  } catch {
-    // Keep the extracted URL; discord-player will report it if it is invalid.
-  }
-
-  return rawUrl;
-}
-
-function getYoutubeUrlInfo(query) {
-  try {
-    const url = new URL(query);
-    const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    const isYoutubeHost = host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com' || host === 'youtu.be';
-    if (!isYoutubeHost) return null;
-
-    const videoId = host === 'youtu.be'
-      ? url.pathname.split('/').filter(Boolean)[0]
-      : url.searchParams.get('v');
-
-    return { videoId: videoId || null, playlistId: url.searchParams.get('list') };
-  } catch {
-    return null;
-  }
-}
-
-function getYoutubeMixInfo(query) {
-  const info = getYoutubeUrlInfo(query);
-  if (!info?.videoId || !info.playlistId?.startsWith('RD')) return null;
-  return info;
-}
-
-function getPlaySearchEngine(query) {
-  const youtube = getYoutubeUrlInfo(query);
-  if (youtube?.playlistId) return QueryType.YOUTUBE_PLAYLIST;
-
-  try {
-    new URL(query);
-    return QueryType.AUTO;
-  } catch {
-    return QueryType.YOUTUBE_SEARCH;
-  }
-}
-
 async function createYoutubeMixSearchResult(query, requestedBy) {
   const mix = getYoutubeMixInfo(query);
   if (!mix) return null;
@@ -255,6 +160,8 @@ async function createYoutubeMixSearchResult(query, requestedBy) {
     });
     track.extractor = extractor;
     tracks.push(track);
+
+    if (tracks.length >= MAX_MIX_TRACKS) break;
   }
 
   if (tracks.length === 0) return null;
@@ -288,44 +195,13 @@ async function resolvePlayInput(query, requestedBy) {
   if (!mix) return query;
 
   try {
-    const nativeResult = await player.search(query, {
-      requestedBy,
-      searchEngine: QueryType.YOUTUBE_PLAYLIST,
-      ignoreCache: true,
-    });
-    if (nativeResult.hasTracks()) return nativeResult;
-  } catch (error) {
-    console.warn(`Native YouTube Mix lookup failed: ${error.message}`);
-  }
-
-  try {
     const fallback = await createYoutubeMixSearchResult(query, requestedBy);
     if (fallback?.hasTracks()) return fallback;
   } catch (error) {
-    console.warn(`YouTube Mix fallback failed: ${error.message}`);
+    console.warn(`YouTube Mix lookup failed: ${error.message}`);
   }
 
   return `https://www.youtube.com/watch?v=${mix.videoId}`;
-}
-
-async function replyError(interaction, message) {
-  const payload = { content: `❌ ${message}`, flags: MessageFlags.Ephemeral };
-
-  try {
-    if (interaction.deferred || interaction.replied) {
-      return await interaction.followUp(payload);
-    }
-    return await interaction.reply(payload);
-  } catch (error) {
-    // Discord interactions only live for a short time. If an old interaction is
-    // delivered after the bot reconnects, do not let the failed error reply
-    // crash the entire process.
-    if (error?.code === 10062 || error?.code === 40060) {
-      console.warn(`Ignored expired or already-handled interaction: ${error.code}`);
-      return null;
-    }
-    throw error;
-  }
 }
 
 async function handleNowPlayingButton(interaction) {
@@ -338,7 +214,8 @@ async function handleNowPlayingButton(interaction) {
   }
 
   const queue = getQueue(interaction);
-  if (!queue || queue !== panel.queue || queue.currentTrack !== panel.track) {
+  if (!queue || interaction.guildId !== panel.guildId || queue.currentTrack?.id !== panel.trackId) {
+    nowPlayingPanels.delete(panelId);
     return replyError(interaction, 'This panel is out of date. Run /nowplaying for the current track controls.');
   }
   if (!sameVoiceChannel(interaction, queue)) {
@@ -360,8 +237,9 @@ async function handleNowPlayingButton(interaction) {
   }
 
   if (action === 'skip') {
-    const trackName = panel.track.cleanTitle || panel.track.title;
+    const trackName = queue.currentTrack.cleanTitle || queue.currentTrack.title;
     if (!queue.node.skip()) return replyError(interaction, 'There is no track to skip.');
+    nowPlayingPanels.delete(panelId);
     await interaction.update({ components: [] });
     return interaction.followUp({
       content: `⏭️ Skipped **${trackName}**.`,
@@ -371,6 +249,7 @@ async function handleNowPlayingButton(interaction) {
 
   if (action === 'stop') {
     queue.clear();
+    nowPlayingPanels.deleteForGuild(interaction.guildId);
     queue.delete();
     await interaction.update({ components: [] });
     return interaction.followUp({
@@ -387,6 +266,7 @@ async function sendNowPlaying(queue, track) {
   if (!channelId) return;
 
   try {
+    nowPlayingPanels.deleteForGuild(queue.guild.id);
     const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return;
 
@@ -398,18 +278,23 @@ async function sendNowPlaying(queue, track) {
 
 player.events.on('playerStart', sendNowPlaying);
 
+player.events.on('playerFinish', (queue, track) => {
+  nowPlayingPanels.deleteForTrack(queue.guild.id, track.id);
+});
+
+player.events.on('queueDelete', (queue) => {
+  nowPlayingPanels.deleteForGuild(queue.guild.id);
+});
+
 player.events.on('error', (queue, error) => {
-  console.error(`[Player error] guild=${queue.guild.id}`, error);
+  console.error(`[Player error] guild=${queue?.guild?.id ?? 'unknown'}`, error);
 });
 
 player.events.on('playerError', (queue, error) => {
-  console.error(`[Track error] guild=${queue.guild.id}`, error);
+  console.error(`[Track error] guild=${queue?.guild?.id ?? 'unknown'}`, error);
 });
 
-client.once('clientReady', async () => {
-  await player.extractors.loadMulti(DefaultExtractors);
-  await player.extractors.register(YoutubeExtractor, {});
-
+async function handleClientReady() {
   const ffmpeg = FFmpeg.resolveSafe(true);
   if (ffmpeg) {
     console.log(`FFmpeg ready: ${ffmpeg.command} (${ffmpeg.version})`);
@@ -427,6 +312,12 @@ client.once('clientReady', async () => {
   }
 
   console.log(`Logged in as ${client.user.tag}.`);
+}
+
+client.once('clientReady', () => {
+  handleClientReady().catch((error) => {
+    console.error('Client-ready initialization failed:', error);
+  });
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -463,9 +354,8 @@ client.on('interactionCreate', async (interaction) => {
 
       const { track, queue, searchResult } = await player.play(voiceChannel, playInput, {
         requestedBy: interaction.user,
-        searchEngine: getPlaySearchEngine(query),
+        searchEngine: getPlaySearchEngine(typeof playInput === 'string' ? playInput : query),
         nodeOptions: {
-          metadata: { channelId: interaction.channelId },
           volume: 70,
           // Keep the playback pipeline light for local Windows playback.
           // These DSP stages are unused by this bot and can add unnecessary
@@ -499,20 +389,20 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'pause') {
       if (queue.node.isPaused()) return replyError(interaction, 'Playback is already paused.');
-      queue.node.pause();
+      if (!queue.node.pause()) return replyError(interaction, 'Playback could not be paused.');
       return interaction.reply('⏸️ Playback paused.');
     }
 
     if (interaction.commandName === 'resume') {
       if (!queue.node.isPaused()) return replyError(interaction, 'Playback is already running.');
-      queue.node.resume();
+      if (!queue.node.resume()) return replyError(interaction, 'Playback could not be resumed.');
       return interaction.reply('▶️ Playback resumed.');
     }
 
     if (interaction.commandName === 'skip') {
       const current = queue.currentTrack;
       if (!current) return replyError(interaction, 'There is no track to skip.');
-      queue.node.skip();
+      if (!queue.node.skip()) return replyError(interaction, 'There is no track to skip.');
       return interaction.reply(`⏭️ Skipped **${current.cleanTitle || current.title}**.`);
     }
 
@@ -618,5 +508,21 @@ async function shutdown(signal) {
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));
 
-client.login(token);
+async function start() {
+  if (!token) {
+    throw new Error('DISCORD_TOKEN is missing. Create a .env file and add your bot token.');
+  }
+
+  await player.extractors.loadMulti(DefaultExtractors);
+  await player.extractors.register(YoutubeExtractor, {});
+  await client.login(token);
+}
+
+if (require.main === module) {
+  start().catch((error) => {
+    console.error('Failed to start the bot:', error);
+    client.destroy();
+    process.exitCode = 1;
+  });
+}
 
