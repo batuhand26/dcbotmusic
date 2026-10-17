@@ -21,6 +21,7 @@ const {
 } = require('./src/play-query');
 const { NowPlayingPanelStore } = require('./src/now-playing-panels');
 const { replyError } = require('./src/interaction');
+const { buildQueueDescription } = require('./src/queue-display');
 
 const token = process.env.DISCORD_TOKEN;
 const guildId = process.env.GUILD_ID;
@@ -445,26 +446,8 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'queue') {
-      const current = queue.currentTrack;
-      const upcoming = queue.tracks.toArray().slice(0, 10);
-      const lines = [];
-
-      if (current) lines.push(`**Now playing:** ${current.cleanTitle || current.title}`);
-      if (upcoming.length) {
-        lines.push(
-          '',
-          ...upcoming.map((track, index) => `${index + 1}. ${track.cleanTitle || track.title} — ${track.duration || '?'}`),
-        );
-      } else {
-        lines.push('', '_There are no more tracks in the queue._');
-      }
-
-      if (queue.tracks.size > 10) {
-        lines.push('', `…and ${queue.tracks.size - 10} more track(s).`);
-      }
-
       return interaction.reply({
-        embeds: [new EmbedBuilder().setTitle('📜 Music queue').setDescription(lines.join('\n'))],
+        embeds: [new EmbedBuilder().setTitle('📜 Music queue').setDescription(buildQueueDescription(queue))],
       });
     }
   } catch (error) {
