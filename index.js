@@ -22,6 +22,13 @@ const {
 const { NowPlayingPanelStore } = require('./src/now-playing-panels');
 const { replyError } = require('./src/interaction');
 const { buildQueueDescription } = require('./src/queue-display');
+const {
+  removeUpcoming,
+  moveUpcoming,
+  shuffleUpcoming,
+  skipToUpcoming,
+  clearUpcoming,
+} = require('./src/queue-actions');
 
 const token = process.env.DISCORD_TOKEN;
 const guildId = process.env.GUILD_ID;
@@ -49,6 +56,15 @@ const commands = [
   new SlashCommandBuilder().setName('skip').setDescription('Skip the current track'),
   new SlashCommandBuilder().setName('stop').setDescription('Stop playback and clear the queue'),
   new SlashCommandBuilder().setName('queue').setDescription('Show the music queue'),
+  new SlashCommandBuilder().setName('remove').setDescription('Remove an upcoming track')
+    .addIntegerOption((option) => option.setName('position').setDescription('Upcoming track position (from /queue)').setMinValue(1).setRequired(true)),
+  new SlashCommandBuilder().setName('move').setDescription('Move an upcoming track')
+    .addIntegerOption((option) => option.setName('from').setDescription('Current position').setMinValue(1).setRequired(true))
+    .addIntegerOption((option) => option.setName('to').setDescription('New position').setMinValue(1).setRequired(true)),
+  new SlashCommandBuilder().setName('shuffle').setDescription('Shuffle upcoming tracks'),
+  new SlashCommandBuilder().setName('skipto').setDescription('Skip to an upcoming track')
+    .addIntegerOption((option) => option.setName('position').setDescription('Upcoming track position (from /queue)').setMinValue(1).setRequired(true)),
+  new SlashCommandBuilder().setName('clear').setDescription('Clear upcoming tracks without stopping the current song'),
   new SlashCommandBuilder().setName('nowplaying').setDescription('Show the currently playing track'),
   new SlashCommandBuilder()
     .setName('loop')
@@ -386,6 +402,19 @@ client.on('interactionCreate', async (interaction) => {
     if (!queue) return replyError(interaction, 'There is no active music queue right now.');
     if (!sameVoiceChannel(interaction, queue)) {
       return replyError(interaction, 'You must be in the same voice channel as the bot to use this command.');
+    }
+
+    if (['remove', 'move', 'shuffle', 'skipto', 'clear'].includes(interaction.commandName)) {
+      const position = interaction.options.getInteger('position');
+      const result = {
+        remove: () => removeUpcoming(queue, position),
+        move: () => moveUpcoming(queue, interaction.options.getInteger('from'), interaction.options.getInteger('to')),
+        shuffle: () => shuffleUpcoming(queue),
+        skipto: () => skipToUpcoming(queue, position),
+        clear: () => clearUpcoming(queue),
+      }[interaction.commandName]();
+      if (result.error) return replyError(interaction, result.error);
+      return interaction.reply(result.message);
     }
 
     if (interaction.commandName === 'pause') {
