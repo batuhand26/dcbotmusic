@@ -26,10 +26,17 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 | `/skip` | Skip the current track |
 | `/stop` | Stop playback and clear the queue |
 | `/queue` | Show the current music queue |
+| `/remove <position>` | Remove an upcoming track |
+| `/move <from> <to>` | Reorder upcoming tracks |
+| `/shuffle` | Shuffle upcoming tracks |
+| `/skipto <position>` | Skip to an upcoming track, dropping earlier tracks |
+| `/clear` | Clear upcoming tracks while the current song continues |
 | `/nowplaying` | Show the currently playing track |
 | `/loop <off|track|queue>` | Disable looping, repeat the current track, or repeat the whole queue |
 | `/volume <0-100>` | Change the playback volume |
 | `/leave` | Disconnect the bot from the voice channel |
+
+Upcoming track positions start at **1** in `/queue`; the currently playing song is not numbered. Queue editing requires being in the same voice channel as the bot.
 
 ## Now Playing Controls
 
