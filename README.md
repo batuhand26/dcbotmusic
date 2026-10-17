@@ -5,6 +5,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 ## Features
 
 - Play songs or playlists from a search query or URL
+- Recognize Spotify tracks, albums, playlists, and Spotify URIs (metadata matched to a streaming source)
 - Pause and resume playback
 - Skip the current track
 - Stop playback and clear the queue
@@ -20,7 +21,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 
 | Command | Description |
 | --- | --- |
-| `/play <query>` | Play a song or playlist from a name or URL |
+| `/play <query>` | Play a song or playlist from a name, YouTube URL, or Spotify track/album/playlist link |
 | `/pause` | Pause playback |
 | `/resume` | Resume playback |
 | `/skip` | Skip the current track |
@@ -30,6 +31,14 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 | `/loop <off|track|queue>` | Disable looping, repeat the current track, or repeat the whole queue |
 | `/volume <0-100>` | Change the playback volume |
 | `/leave` | Disconnect the bot from the voice channel |
+
+## Spotify links
+
+Paste a Spotify track, album or public playlist URL into `/play`. The bot also accepts `spotify:track:...`, `spotify:album:...`, and `spotify:playlist:...` URIs. Spotify link tracking parameters and supported locale prefixes are removed automatically.
+
+**Spotify is used for metadata, not Spotify audio.** The installed Spotify extractor must find a match through a playable provider (such as YouTube or SoundCloud). Some songs and playlists may not be available, matches may differ, and playback depends on those providers. Private playlists, podcasts, and Spotify short links are not supported by this URL normalizer.
+
+The Spotify metadata extractor works without custom credentials when its anonymous access remains available. For more reliable authenticated metadata lookups, you may set both `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` in `.env` (never commit secrets).
 
 ## Now Playing Controls
 
@@ -95,6 +104,8 @@ npm update
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | Discord bot token from the Developer Portal |
 | `GUILD_ID` | No | Server ID used for fast guild-specific command registration during development |
+| `SPOTIFY_CLIENT_ID` | No | Spotify application client ID; pair with secret |
+| `SPOTIFY_CLIENT_SECRET` | No | Spotify application client secret; keep private |
 
 Never commit your `.env` file or bot token. The repository already ignores `.env` and log files.
 
