@@ -13,6 +13,7 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 - Control playback from Now Playing buttons
 - Loop the current track or the whole queue
 - Adjust playback volume
+- Configure Discord voice bitrate with `/quality`; avoid unnecessary transcoding when supported
 - Leave the voice channel
 - Optional guild-specific slash command registration for faster development
 
@@ -34,9 +35,18 @@ A lightweight Discord music bot built with Node.js, [discord.js](https://discord
 | `/nowplaying` | Show the currently playing track |
 | `/loop <off|track|queue>` | Disable looping, repeat the current track, or repeat the whole queue |
 | `/volume <0-100>` | Change the playback volume |
+| `/quality <auto|64|96|128>` | Set the Discord voice encoding bitrate (kbps) |
 | `/leave` | Disconnect the bot from the voice channel |
 
 Upcoming track positions start at **1** in `/queue`; the currently playing song is not numbered. Queue editing requires being in the same voice channel as the bot.
+
+## Audio quality and stability
+
+The bot uses Discord Player's optional `skipFFmpeg` path for demuxable audio streams and still uses FFmpeg when conversion is necessary. Unused DSP filters remain disabled. Audio buffering and connection timeouts are set to 20 seconds to tolerate short connection delays. The initial channel metadata is provided before playback starts so a fast first track can still announce itself.
+
+Use `/quality auto` for the default adaptive bitrate (recommended). You can also select `/quality 64`, `/quality 96` or `/quality 128` to request fixed voice encoder bitrates (in kbps). These choices **do not upgrade source audio** and may be constrained by the voice channel/server settings. Settings last for the active queue and reset after the queue is deleted or the bot restarts.
+
+If the source audio is distorted, a higher encoding bitrate alone cannot restore missing detail. Avoid unnecessary audio processing and check the original source and network/hosting performance.
 
 ## Now Playing Controls
 
