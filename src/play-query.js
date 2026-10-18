@@ -1,9 +1,13 @@
 const { QueryType } = require('discord-player');
+const { spotifyLinkInfo } = require('./spotify-links');
 
 function normalizePlayQuery(input) {
   const query = input
     .trim()
     .replace(/\\([\\_*[\]()~`>#+\-=|{}.!&])/g, '$1');
+
+  const spotify = spotifyLinkInfo(query);
+  if (spotify) return spotify.url;
 
   const httpsIndex = query.toLowerCase().indexOf('https://');
   const httpIndex = query.toLowerCase().indexOf('http://');
@@ -15,6 +19,8 @@ function normalizePlayQuery(input) {
   const delimiterIndex = rawUrl.search(/[\s<>[\]()]/);
   if (delimiterIndex >= 0) rawUrl = rawUrl.slice(0, delimiterIndex);
   rawUrl = rawUrl.replace(/[.,;:!?]+$/, '');
+  const embeddedSpotify = spotifyLinkInfo(rawUrl);
+  if (embeddedSpotify) return embeddedSpotify.url;
 
   try {
     const url = new URL(rawUrl);
@@ -77,6 +83,7 @@ function getYoutubeMixInfo(query) {
 }
 
 function getPlaySearchEngine(query) {
+  if (spotifyLinkInfo(query)) return QueryType.AUTO;
   const youtube = getYoutubeUrlInfo(query);
   if (youtube?.playlistId) return QueryType.YOUTUBE_PLAYLIST;
 
