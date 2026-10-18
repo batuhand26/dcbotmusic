@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check src/play-query.js && node --check src/now-playing-panels.js && node --check src/interaction.js && node --check src/queue-display.js && node --check src/spotify-links.js",
+    "check": "node --check index.js && node --check src/play-query.js && node --check src/now-playing-panels.js && node --check src/interaction.js && node --check src/queue-display.js && node --check src/queue-actions.js && node --check src/spotify-links.js",
     "test": "node --test"
   },
   "keywords": [
