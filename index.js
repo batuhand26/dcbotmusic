@@ -12,7 +12,7 @@ const {
 } = require('discord.js');
 const { Player, QueryType, QueueRepeatMode, Track, Playlist, SearchResult } = require('discord-player');
 const { FFmpeg } = require('@discord-player/ffmpeg');
-const { DefaultExtractors } = require('@discord-player/extractor');
+const { DefaultExtractors, SpotifyExtractor } = require('@discord-player/extractor');
 const { YoutubeExtractor, getInnertube } = require('discord-player-youtubei');
 const {
   normalizePlayQuery,
@@ -23,6 +23,7 @@ const { NowPlayingPanelStore } = require('./src/now-playing-panels');
 const { replyError } = require('./src/interaction');
 const { buildQueueDescription } = require('./src/queue-display');
 const { buildNodeOptions, qualityOption } = require('./src/audio-quality');
+const { spotifyLinkInfo } = require('./src/spotify-links');
 const {
   removeUpcoming,
   moveUpcoming,
@@ -46,11 +47,11 @@ const MAX_MIX_TRACKS = 50;
 const commands = [
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a song or playlist')
+    .setDescription('Play a song or playlist (Spotify links supported)')
     .addStringOption((option) =>
       option
         .setName('query')
-        .setDescription('Song name or URL')
+        .setDescription('Song name, YouTube URL or Spotify link')
         .setRequired(true),
     ),
   new SlashCommandBuilder().setName('pause').setDescription('Pause playback'),
@@ -497,8 +498,14 @@ client.on('interactionCreate', async (interaction) => {
   } catch (error) {
     console.error(`/${interaction.commandName} command failed:`, error);
     try {
-      if (interaction.commandName === 'play' && error?.code === 'ERR_NO_RESULT') {
-        return await replyError(interaction, 'No track was found. Try a song name or a valid URL.');
+      if (interaction.commandName === 'play') {
+        const input = normalizePlayQuery(interaction.options.getString('query', true));
+        if (spotifyLinkInfo(input)) {
+          return await replyError(interaction, 'Could not resolve this Spotify link. Make sure it is public, and check that a compatible audio source is available.');
+        }
+        if (error?.code === 'ERR_NO_RESULT') {
+          return await replyError(interaction, 'No track was found. Try a song name or a valid URL.');
+        }
       }
       return await replyError(interaction, 'Something went wrong while running the command. Check the console output.');
     } catch (replyFailure) {
@@ -540,7 +547,13 @@ async function start() {
     throw new Error('DISCORD_TOKEN is missing. Create a .env file and add your bot token.');
   }
 
-  await player.extractors.loadMulti(DefaultExtractors);
+  // The Spotify extractor fetches metadata; playable audio is bridged by a
+  // streaming extractor. Optional API credentials can improve reliability.
+  await player.extractors.loadMulti(DefaultExtractors.filter((Extractor) => Extractor !== SpotifyExtractor));
+  const spotifyCredentials = process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET
+    ? { clientId: process.env.SPOTIFY_CLIENT_ID, clientSecret: process.env.SPOTIFY_CLIENT_SECRET }
+    : {};
+  await player.extractors.register(SpotifyExtractor, spotifyCredentials);
   await player.extractors.register(YoutubeExtractor, {});
   await client.login(token);
 }

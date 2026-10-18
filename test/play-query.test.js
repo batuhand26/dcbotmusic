@@ -60,3 +60,23 @@ test('getPlaySearchEngine chooses the narrowest useful search engine', () => {
   assert.equal(getPlaySearchEngine('https://example.com/audio.mp3'), QueryType.AUTO);
   assert.equal(getPlaySearchEngine('never gonna give you up'), QueryType.YOUTUBE_SEARCH);
 });
+
+test('normalizePlayQuery recognizes Spotify URLs and URI variants', () => {
+  const id = '4uLU6hMCjMI75M1A2tKUQC';
+  assert.equal(
+    normalizePlayQuery(`spotify:track:${id}`),
+    `https://open.spotify.com/track/${id}`,
+  );
+  assert.equal(
+    normalizePlayQuery(`play https://open.spotify.com/intl-tr/playlist/${id}?si=tracking now`),
+    `https://open.spotify.com/playlist/${id}`,
+  );
+  assert.equal(
+    normalizePlayQuery(`https://open.spotify.com/album/${id}?si=tracking`),
+    `https://open.spotify.com/album/${id}`,
+  );
+  assert.equal(
+    getPlaySearchEngine(`https://open.spotify.com/track/${id}`),
+    QueryType.AUTO,
+  );
+});
