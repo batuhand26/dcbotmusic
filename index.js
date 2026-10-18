@@ -22,6 +22,7 @@ const {
 const { NowPlayingPanelStore } = require('./src/now-playing-panels');
 const { replyError } = require('./src/interaction');
 const { buildQueueDescription } = require('./src/queue-display');
+const { buildNodeOptions, qualityOption } = require('./src/audio-quality');
 const {
   removeUpcoming,
   moveUpcoming,
@@ -37,8 +38,9 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
 
-const player = new Player(client);
+const player = new Player(client, { skipFFmpeg: true });
 const nowPlayingPanels = new NowPlayingPanelStore();
+const guildBitrates = new Map();
 const MAX_MIX_TRACKS = 50;
 
 const commands = [
@@ -66,6 +68,16 @@ const commands = [
     .addIntegerOption((option) => option.setName('position').setDescription('Upcoming track position (from /queue)').setMinValue(1).setRequired(true)),
   new SlashCommandBuilder().setName('clear').setDescription('Clear upcoming tracks without stopping the current song'),
   new SlashCommandBuilder().setName('nowplaying').setDescription('Show the currently playing track'),
+  new SlashCommandBuilder().setName('quality').setDescription('Choose the voice audio bitrate')
+    .addStringOption((option) => option.setName('mode')
+      .setDescription('Automatic or a fixed bitrate; source quality is unchanged')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Automatic', value: 'auto' },
+        { name: '64 kbps', value: '64' },
+        { name: '96 kbps', value: '96' },
+        { name: '128 kbps', value: '128' },
+      )),
   new SlashCommandBuilder()
     .setName('loop')
     .setDescription('Change the music loop mode')
@@ -293,7 +305,17 @@ async function sendNowPlaying(queue, track) {
   }
 }
 
-player.events.on('playerStart', sendNowPlaying);
+player.events.on('playerStart', (queue, track) => {
+  const bitrate = guildBitrates.get(queue.guild.id);
+  if (bitrate !== undefined) {
+    try {
+      queue.node.setBitrate(bitrate);
+    } catch (error) {
+      console.warn('Could not apply requested audio bitrate:', error.message);
+    }
+  }
+  return sendNowPlaying(queue, track);
+});
 
 player.events.on('playerFinish', (queue, track) => {
   nowPlayingPanels.deleteForTrack(queue.guild.id, track.id);
@@ -301,6 +323,7 @@ player.events.on('playerFinish', (queue, track) => {
 
 player.events.on('queueDelete', (queue) => {
   nowPlayingPanels.deleteForGuild(queue.guild.id);
+  guildBitrates.delete(queue.guild.id);
 });
 
 player.events.on('error', (queue, error) => {
@@ -372,23 +395,7 @@ client.on('interactionCreate', async (interaction) => {
       const { track, queue, searchResult } = await player.play(voiceChannel, playInput, {
         requestedBy: interaction.user,
         searchEngine: getPlaySearchEngine(typeof playInput === 'string' ? playInput : query),
-        nodeOptions: {
-          volume: 70,
-          // Keep the playback pipeline light for local Windows playback.
-          // These DSP stages are unused by this bot and can add unnecessary
-          // real-time CPU work, which may show up as brief crackling/jitter.
-          disableEqualizer: true,
-          disableFilterer: true,
-          disableBiquad: true,
-          disableCompressor: true,
-          disableReverb: true,
-          disableSeeker: true,
-          leaveOnEmpty: true,
-          leaveOnEmptyCooldown: 60_000,
-          leaveOnEnd: true,
-          leaveOnEndCooldown: 30_000,
-          leaveOnStop: true,
-        },
+        nodeOptions: buildNodeOptions(interaction.channelId),
       });
 
       queue.setMetadata({ channelId: interaction.channelId });
@@ -415,6 +422,14 @@ client.on('interactionCreate', async (interaction) => {
       }[interaction.commandName]();
       if (result.error) return replyError(interaction, result.error);
       return interaction.reply(result.message);
+    }
+
+    if (interaction.commandName === 'quality') {
+      const selected = qualityOption(interaction.options.getString('mode', true));
+      if (!selected) return replyError(interaction, 'Unsupported audio bitrate.');
+      queue.node.setBitrate(selected.value);
+      guildBitrates.set(interaction.guildId, selected.value);
+      return interaction.reply(`🎚️ Voice audio bitrate set to **${selected.label}**. Source quality and voice-channel limits still apply.`);
     }
 
     if (interaction.commandName === 'pause') {
